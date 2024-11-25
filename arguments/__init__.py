@@ -59,23 +59,23 @@ class PipelineParams(ParamGroup):
 
 class OptimizationParams(ParamGroup):
     def __init__(self, parser):
-        self.iterations = 30_000
-        self.position_lr_init = 0.00016
-        self.position_lr_final = 0.0000016
+        self.iterations = 30_000  # 迭代次数
+        self.position_lr_init = 0.00016  # 位置初始学习率
+        self.position_lr_final = 0.0000016  # 位置最终学习率
         self.position_lr_delay_mult = 0.01
         self.position_lr_max_steps = 30_000
-        self.feature_lr = 0.0025
-        self.opacity_lr = 0.05
-        self.scaling_lr = 0.005
-        self.rotation_lr = 0.001
-        self.percent_dense = 0.01
-        self.lambda_dssim = 0.2
-        self.densification_interval = 100
-        self.opacity_reset_interval = 3000
-        self.densify_from_iter = 500
-        self.densify_until_iter = 15_000
-        self.densify_grad_threshold = 0.0002
-        self.random_background = False
+        self.feature_lr = 0.0025  # 球谐特征学习率
+        self.opacity_lr = 0.05  # 透明度学习率
+        self.scaling_lr = 0.005  # 缩放系数学习率
+        self.rotation_lr = 0.001  # 旋转系数学习率
+        self.percent_dense = 0.01  # 密度百分比
+        self.lambda_dssim = 0.2  # 权重因子λ
+        self.densification_interval = 100  # 致密化层段(500-15000每100次更新)
+        self.opacity_reset_interval = 3000  # 重置不透明度层段
+        self.densify_from_iter = 500  # 从500开始致密化
+        self.densify_until_iter = 15_000  # 致密化直到15000
+        self.densify_grad_threshold = 0.0002  # 自适应密度化的阈值
+        self.random_background = False  # 随机背景
         super().__init__(parser, "Optimization Parameters")
 
 def get_combined_args(parser : ArgumentParser):

@@ -27,6 +27,7 @@ def try_connect():
         print(f"\nConnected by {addr}")
         conn.settimeout(None)
     except Exception as inst:
+        print("ok_pass_connect")
         pass
             
 def read():

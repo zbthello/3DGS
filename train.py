@@ -6,11 +6,12 @@ from arguments import ModelParams, PipelineParams, OptimizationParams
 import torch.autograd
 import sys
 from utils.general_utils import safe_state
-from gaussian_renderer import network_gui
+from gaussian_renderer import network_gui, render
 
 from scene import GaussianModel,Scene
 import os
 import uuid
+from tqdm import tqdm
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -44,11 +45,52 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
 
+    # 初始化高斯模型，用于表示场景中的每个点的3D高斯分布
     gaussians = GaussianModel(dataset.sh_degree)
 
+    # 初始化场景对象，加载数据集和对应的相机参数
     scene = Scene(dataset,gaussians)
 
+    # 为高斯模型参数设置优化器和学习率调度器
     gaussians.training_setup(opt)
+
+    # 如果提供了checkpoint，则从checkpoint加载模型参数并恢复训练进度
+    if checkpoint:
+        (model_params, first_iter) = torch.load(checkpoint)
+        gaussians.restore(model_params, opt)
+    # 设置背景颜色，白色或黑色取决于数据集要求
+    bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
+    background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
+
+    # 创建CUDA事件用于计时
+    iter_start = torch.cuda.Event(enable_timing = True)
+    iter_end = torch.cuda.Event(enable_timing = True)
+
+    viewpoint_stack = None
+    ema_loss_for_log = 0.0
+
+    # 使用tqdm库创建进度条，追踪训练进度
+    progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
+    first_iter += 1
+    for iteration in range(first_iter, opt.iterations + 1):
+
+        # 本地训练跳过连接 "ok_pass_connect"
+        if network_gui.conn == None:
+            network_gui.try_connect()
+        while network_gui.conn != None:
+            try:
+                net_image_bytes = None
+                custom_cam, do_training, pipe.convert_SHs_python, pipe.compute_cov3D_python, keep_alive, scaling_modifer = network_gui.receive()
+                if custom_cam != None:
+                    net_image = render(custom_cam, gaussians, pipe, background, scaling_modifer)["render"]
+                    net_image_bytes = memoryview((torch.clamp(net_image, min=0, max=1.0) * 255).byte().permute(1, 2, 0).contiguous().cpu().numpy())
+
+                print(net_image_bytes)
+                network_gui.send(net_image_bytes, dataset.source_path)
+                if do_training and ((iteration < int(opt.iterations)) or not keep_alive):
+                    break
+            except Exception as e:
+                network_gui.conn = None
 
 
 

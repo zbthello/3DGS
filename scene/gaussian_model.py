@@ -183,6 +183,8 @@ class GaussianModel:
 
     def training_setup(self, training_args):
         self.percent_dense = training_args.percent_dense
+
+        # 初始化用于累积3D高斯中心点位置梯度的张量，用于之后判断是否需要对3D高斯进行克隆或切分
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
 
@@ -195,7 +197,14 @@ class GaussianModel:
             {'params': [self._rotation], 'lr': training_args.rotation_lr, "name": "rotation"}
         ]
 
+        # torch.optim.AdamW(l,lr=0.0,eps=1e-15) Adam被发现数学上有错误，于是提出了AdamW；AdamW是数学上完美的
+        # 使用Adam优化器
+        # params（必须参数）: 这是一个包含了需要优化的参数（张量）的迭代器
+        # lr（默认值为 0.001）: 学习率（learning rate）。
+        # eps（默认值为 1e-8）: 为了数值稳定性而添加到分母中的小常数。防止除零错误。
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
+
+        # 创建学习率调度器，用于对中心点位置的学习率进行调整
         self.xyz_scheduler_args = get_expon_lr_func(lr_init=training_args.position_lr_init*self.spatial_lr_scale,
                                                     lr_final=training_args.position_lr_final*self.spatial_lr_scale,
                                                     lr_delay_mult=training_args.position_lr_delay_mult,
