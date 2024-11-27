@@ -12,6 +12,7 @@ from scene import GaussianModel,Scene
 import os
 import uuid
 from tqdm import tqdm
+from random import randint
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -91,6 +92,33 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     break
             except Exception as e:
                 network_gui.conn = None
+
+        # 记录当前迭代的开始时间，用于计算每次迭代的持续时间
+        iter_start.record()
+
+        # 根据当前迭代次数更新学习率
+        gaussians.update_learning_rate(iteration)
+
+        # 每1000次迭代，提升球谐函数的次数以改进模型复杂度
+        if iteration % 1000 == 0:
+            gaussians.oneupSHdegree()
+
+        # 随机选择一个训练用的相机视角
+        if not viewpoint_stack:
+            viewpoint_stack = scene.getTrainCameras().copy()
+        viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
+
+        # 渲染
+        if (iteration - 1) == debug_from:
+            pipe.debug = True
+
+        # 设置背景
+        bg = torch.rand((3), device="cuda") if opt.random_background else background
+
+        render_pkg = render(viewpoint_cam, gaussians, pipe, bg)
+
+
+
 
 
 

@@ -32,6 +32,18 @@ def get_expon_lr_func(
     :param max_steps: int, the number of steps during optimization.
     :return HoF which takes step as input
     """
+    """
+    连续学习率衰减函数。改编自JaxNeRF
+    当step=0时，返回的速率为lr_init，当step=max_steps时，返回速率为lr_final，以及
+    在其他地方进行对数线性插值（相当于指数衰减）。
+    如果lr_delay_steps>0，则学习率将按某种平滑的比例缩放
+    lr_delay_mult的函数，使得初始学习率为
+    lr_init*lr_delay_mult在优化开始时出现，但会有所缓解
+    当步数>lr_delay_steps时，将学习率恢复到正常水平。
+    ：param conf:config子树'lr'或类似树
+    ：parammax_steps：int，优化过程中的步骤数。
+    ：返回将step作为输入的HoF
+    """
 
     def helper(step):
         if step < 0 or (lr_init == 0.0 and lr_final == 0.0):

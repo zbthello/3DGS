@@ -211,11 +211,19 @@ class GaussianModel:
                                                     max_steps=training_args.position_lr_max_steps)
 
     def update_learning_rate(self, iteration):
-        ''' Learning rate scheduling per step '''
+        """
+        根据当前的迭代次数动态调整xyz参数的学习率
+        :param iteration:当前的迭代次数
+        :return:lr:返回这个新的学习率值，可能用于日志记录或其他用途
+        """
         for param_group in self.optimizer.param_groups:
+            # 找到名为"xyz"的参数组，即3D高斯分布中心位置的参数
             if param_group["name"] == "xyz":
+                # 使用xyz_scheduler_args函数（一个根据迭代次数返回学习率的调度函数）计算当前迭代次数的学习率
                 lr = self.xyz_scheduler_args(iteration)
+                # 将计算得到的学习率应用到xyz参数组
                 param_group['lr'] = lr
+                # 返回这个新的学习率值，可能用于日志记录或其他用途
                 return lr
 
     def construct_list_of_attributes(self):
