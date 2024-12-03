@@ -78,6 +78,7 @@ def render(viewpoint_camera, pc: GaussianModel, pipe, bg_color: torch.Tensor, sc
     else:
         colors_precomp = override_color
 
+    # 将可见的高斯图像光栅化，获得它们的半径（在屏幕上）。
     # Rasterize visible Gaussians to image, obtain their radii (on screen). 
     rendered_image, radii = rasterizer(
         means3D=means3D,
@@ -89,6 +90,8 @@ def render(viewpoint_camera, pc: GaussianModel, pipe, bg_color: torch.Tensor, sc
         rotations=rotations,
         cov3D_precomp=cov3D_precomp)
 
+    # 那些被截锥或半径为0的高斯是看不见的。
+    # 它们将被排除在拆分标准中使用的值更新之外。
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
     # They will be excluded from value updates used in the splitting criteria.
     return {"render": rendered_image,
