@@ -92,6 +92,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     # 初始化场景对象，加载数据集和对应的相机参数
     scene = Scene(dataset,gaussians)
 
+
     # 为高斯模型参数设置优化器和学习率调度器
     gaussians.training_setup(opt)
 
@@ -181,7 +182,36 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if(iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
-        break
+
+            # 在指定迭代区间内，对3D高斯模型进行增密和修剪
+            # 致密化
+            if iteration < opt.densify_until_iter:
+                # 跟踪图像空间中的最大半径以进行修剪
+                gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
+                # 添加致密化统计数据(add_densification_stats)
+                # 统计坐标的累积梯度xyz_gradient_accum和均值的分母denom（即迭代步数）
+                gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
+
+                # iteration在500到15000轮之间每100层段进行一次致密化
+                if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
+                    size_threshold = 20 if iteration > opt.opacity_reset_interval else None
+                    gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold)
+
+                # iteration在0到15000轮之间每3000层段进行一次透明度重置
+                if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
+                    gaussians.reset_opacity()
+
+            # step()函数的作用是执行一次优化步骤，通过梯度下降法来更新参数的值。
+            # 因为梯度下降是基于梯度的，所以在执行optimizer.step()函数前应先执行loss.backward()函数来计算梯度。
+            if iteration < opt.iterations:
+                gaussians.optimizer.step()
+                gaussians.optimizer.zero_grad(set_to_none = True)
+                # optimizer.zero_grad()函数会遍历模型的所有参数，通过p.grad.detach_()方法截断反向传播的梯度流，
+                # 再通过p.grad.zero_()函数将每个参数的梯度值设为0，即上一次的梯度记录被清空。
+
+            if (iteration in checkpoint_iterations):
+                print("\n[ITER {}] Saving Checkpoint".format(iteration))
+                torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
 
 
 

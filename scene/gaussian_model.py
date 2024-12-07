@@ -76,7 +76,7 @@ class GaussianModel:
         self.xyz_gradient_accum = torch.empty(0)  # 用于累积3D高斯中心位置的梯度,当它太大的时候要对Gaussian进行分裂或复制
         self.denom = torch.empty(0)  # 与累积梯度配合使用，表示统计了多少次累积梯度，算平均梯度时除掉这个（denom = denominator，分母）
         self.optimizer = None  # 优化器
-        self.percent_dense = 0  # 参与控制3D高斯密集程度的超参数
+        self.percent_dense = 0  # 参与控制3D高斯密集程度的超参数(密度百分比)
         self.spatial_lr_scale = 0  # 坐标的学习率要乘上这个,抵消在不同尺度下应用同一个学习率带来的问题
         self.setup_functions()  # 用于设置3D高斯的缩放尺度、旋转参数、不透明度、协方差的激活函数
 
@@ -266,8 +266,12 @@ class GaussianModel:
         el = PlyElement.describe(elements, 'vertex')
         PlyData([el]).write(path)
 
-    def reset_opacity(self):
+    def  reset_opacity(self):
+        # get_opacity返回了经过exp的不透明度，是真的不透明度
+        # 让所有不透明度都不能超过0.01
         opacities_new = inverse_sigmoid(torch.min(self.get_opacity, torch.ones_like(self.get_opacity)*0.01))
+
+        # 更新优化器中的不透明度
         optimizable_tensors = self.replace_tensor_to_optimizer(opacities_new, "opacity")
         self._opacity = optimizable_tensors["opacity"]
 
@@ -347,6 +351,7 @@ class GaussianModel:
                 optimizable_tensors[group["name"]] = group["params"][0]
         return optimizable_tensors
 
+    # 删除Gaussian并移除对应的所有属性
     def prune_points(self, mask):
         valid_points_mask = ~mask
         optimizable_tensors = self._prune_optimizer(valid_points_mask)
@@ -386,6 +391,7 @@ class GaussianModel:
         return optimizable_tensors
 
     def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation):
+        # 新增Gaussian，把新属性添加到优化器中
         d = {"xyz": new_xyz,
         "f_dc": new_features_dc,
         "f_rest": new_features_rest,
@@ -405,14 +411,30 @@ class GaussianModel:
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
+    # 通过分裂增加密度
     def densify_and_split(self, grads, grad_threshold, scene_extent, N=2):
         n_init_points = self.get_xyz.shape[0]
+        # 提取满足梯度条件的点
         # Extract points that satisfy the gradient condition
         padded_grad = torch.zeros((n_init_points), device="cuda")
         padded_grad[:grads.shape[0]] = grads.squeeze()
         selected_pts_mask = torch.where(padded_grad >= grad_threshold, True, False)
         selected_pts_mask = torch.logical_and(selected_pts_mask,
                                               torch.max(self.get_scaling, dim=1).values > self.percent_dense*scene_extent)
+        '''被分裂的Gaussians满足两个条件：
+            1. （平均）梯度过大；
+            2. 在某个方向的最大缩放大于一个阈值。
+                参照论文5.2节“On the other hand...”一段，大Gaussian被分裂成两个小Gaussians，
+                其放缩被除以φ=1.6，且位置是以原先的大Gaussian作为概率密度函数进行采样的。
+        '''
+        # 获取初始点云的数量 n_init_points。
+        # 创建一个与梯度相同大小的零张量 padded_grad，并将梯度值填充到其中。
+        # 根据梯度的阈值条件和点云的缩放因子，生成一个选择点的掩码 selected_pts_mask。
+        # 将满足梯度和缩放条件的点复制 N次，并计算新的坐标、缩放、旋转和特征。
+        # 将新生成的点云和特征附加到原始点云中。
+        # 创建一个用于剪枝的过滤器prune_filter，其中包括原始点云和新生成的点云的掩码。
+        # 根据剪枝过滤器删除不需要的点。
+        # =======================> N = 2
 
         stds = self.get_scaling[selected_pts_mask].repeat(N,1)
         means =torch.zeros((stds.size(0), 3),device="cuda")
@@ -427,15 +449,20 @@ class GaussianModel:
 
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation)
 
+        # 删除分裂的原始GS椭球
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
 
+    # 通过克隆增加密度
     def densify_and_clone(self, grads, grad_threshold, scene_extent):
+        # 提取满足梯度条件的点
         # Extract points that satisfy the gradient condition
         selected_pts_mask = torch.where(torch.norm(grads, dim=-1) >= grad_threshold, True, False)
         selected_pts_mask = torch.logical_and(selected_pts_mask,
                                               torch.max(self.get_scaling, dim=1).values <= self.percent_dense*scene_extent)
-        
+        # 提取出大于阈值`grad_threshold`且缩放参数较小（小于self.percent_dense * scene_extent）的Gaussians
+        # 在下面进行克隆
+
         new_xyz = self._xyz[selected_pts_mask]
         new_features_dc = self._features_dc[selected_pts_mask]
         new_features_rest = self._features_rest[selected_pts_mask]
@@ -445,13 +472,18 @@ class GaussianModel:
 
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation)
 
+    # 致密和修剪(densify_and_prune)
     def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size):
-        grads = self.xyz_gradient_accum / self.denom
+        grads = self.xyz_gradient_accum / self.denom # 计算平均梯度
         grads[grads.isnan()] = 0.0
 
-        self.densify_and_clone(grads, max_grad, extent)
-        self.densify_and_split(grads, max_grad, extent)
+        self.densify_and_clone(grads, max_grad, extent) # 通过克隆增加密度
+        self.densify_and_split(grads, max_grad, extent) # 通过分裂增加密度
 
+        # 接下来移除一些Gaussians，它们满足下列要求中的一个：
+        # 1. 接近透明（不透明度小于min_opacity）
+        # 2. 在某个相机视野里出现过的最大2D半径大于屏幕（像平面）大小
+        # 3. 在某个方向的最大缩放大于0.1 * extent（也就是说很长的长条形也是会被移除的）
         prune_mask = (self.get_opacity < min_opacity).squeeze()
         if max_screen_size:
             big_points_vs = self.max_radii2D > max_screen_size
@@ -461,6 +493,7 @@ class GaussianModel:
 
         torch.cuda.empty_cache()
 
+    # 统计坐标的累积梯度xyz_gradient_accum和均值的分母denom（即迭代步数）
     def add_densification_stats(self, viewspace_point_tensor, update_filter):
         self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True)
         self.denom[update_filter] += 1
